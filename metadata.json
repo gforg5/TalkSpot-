@@ -1,0 +1,8 @@
+{
+  "name": "TalkSpot - AI Powered Communication",
+  "description": "A premium WebRTC conferencing suite with real-time AI transcription,restyling, and noise reduction.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
