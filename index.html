@@ -4,17 +4,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>TalkSpot | Secure Communication</title>
+    <title>TalkSpot | Neural Communication</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@300;500;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-primary: #0b141a;
-            --bg-secondary: #111b21;
-            --bg-tertiary: #202c33;
-            --accent: #00a884;
-            --text-primary: #e9edef;
-            --text-secondary: #8696a0;
+            --bg-primary: #020204;
+            --bg-secondary: #050508;
+            --bg-tertiary: #0a0a0f;
+            --accent: #00f3ff;
+            --accent-glow: rgba(0, 243, 255, 0.4);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --glass-border: rgba(0, 243, 255, 0.1);
         }
         body {
             font-family: 'Inter', sans-serif;
@@ -27,6 +29,9 @@
             position: fixed;
             -webkit-tap-highlight-color: transparent;
         }
+        h1, h2, h3, button {
+            font-family: 'Space+Grotesk', sans-serif;
+        }
         #root {
             height: 100%;
             width: 100%;
@@ -34,27 +39,50 @@
         .mirror {
             transform: scaleX(-1);
         }
-        .whatsapp-shadow {
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        .neon-border {
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 0 15px rgba(0, 243, 255, 0.05);
         }
-        .glass-card {
-            background: rgba(32, 44, 51, 0.7);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.05);
+        .neon-glow {
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+        .neon-text {
+            text-shadow: 0 0 10px var(--accent-glow);
+        }
+        .glass-panel {
+            background: rgba(10, 10, 15, 0.8);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+        }
+        @keyframes scanline {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100%); }
+        }
+        .scanline {
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(to right, transparent, var(--accent), transparent);
+            position: absolute;
+            top: 0;
+            left: 0;
+            opacity: 0.1;
+            animation: scanline 4s linear infinite;
+            pointer-events: none;
         }
         @keyframes slideUp {
             from { transform: translateY(20px); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
         }
         .animate-slide-up {
-            animation: slideUp 0.3s ease-out forwards;
+            animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
         }
         ::-webkit-scrollbar {
-            width: 6px;
+            width: 4px;
         }
         ::-webkit-scrollbar-thumb {
-            background: rgba(255,255,255,0.1);
+            background: var(--accent);
             border-radius: 10px;
+            opacity: 0.3;
         }
     </style>
 <script type="importmap">
@@ -69,6 +97,7 @@
 </script>
 </head>
 <body class="dark">
+    <div class="scanline"></div>
     <div id="root"></div>
 </body>
 </html>
