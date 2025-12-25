@@ -170,6 +170,7 @@ const App: React.FC = () => {
         ) : (status === CallStatus.IDLE || status === CallStatus.ERROR ? (
           <RoomSetup onJoin={handleJoinRoom} error={error} profile={profile} />
         ) : (
+          /* Fix: Passing the profile prop down to CallContainer */
           <CallContainer 
             localStream={localStream}
             remoteStream={remoteStream}
@@ -177,6 +178,7 @@ const App: React.FC = () => {
             status={status}
             roomId={roomId}
             iceStatus={iceStatus}
+            profile={profile}
           />
         ))}
       </main>

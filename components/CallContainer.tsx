@@ -1,6 +1,7 @@
 
+import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
 import React, { useState, useEffect, useRef } from 'react';
-import { CallStatus, Transcript, IceStatus } from '../types';
+import { CallStatus, Transcript, IceStatus, UserProfile } from '../types';
 import Controls from './Controls';
 import VideoView from './VideoView';
 import Sidebar from './Sidebar';
@@ -12,6 +13,7 @@ interface CallContainerProps {
   status: CallStatus;
   roomId: string;
   iceStatus?: IceStatus;
+  profile: UserProfile;
 }
 
 const CallContainer: React.FC<CallContainerProps> = ({ 
@@ -20,12 +22,16 @@ const CallContainer: React.FC<CallContainerProps> = ({
   onHangup, 
   status,
   roomId,
-  iceStatus = 'new'
+  iceStatus = 'new',
+  profile
 }) => {
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [transcripts, setTranscripts] = useState<Transcript[]>([]);
+  
+  const currentTranscriptionRef = useRef('');
 
   // Sync state with tracks
   useEffect(() => {
@@ -34,6 +40,98 @@ const CallContainer: React.FC<CallContainerProps> = ({
       localStream.getVideoTracks().forEach(t => t.enabled = !isVideoOff);
     }
   }, [isMuted, isVideoOff, localStream]);
+
+  // AI Transcription Logic
+  useEffect(() => {
+    if (status !== CallStatus.IN_CALL || !remoteStream) return;
+
+    // Fix: Initializing GoogleGenAI right before connection as per guidelines
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+    
+    // Helper to encode PCM to base64
+    const encode = (bytes: Uint8Array) => {
+      let binary = '';
+      const len = bytes.byteLength;
+      for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
+    };
+
+    // Helper to create the audio blob for Gemini
+    const createBlob = (data: Float32Array) => {
+      const l = data.length;
+      const int16 = new Int16Array(l);
+      for (let i = 0; i < l; i++) {
+        int16[i] = data[i] * 32768;
+      }
+      return {
+        data: encode(new Uint8Array(int16.buffer)),
+        mimeType: 'audio/pcm;rate=16000',
+      };
+    };
+
+    const sessionPromise = ai.live.connect({
+      model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+      callbacks: {
+        onopen: () => {
+          console.debug('AI Transcription Session Connected');
+          const source = audioContext.createMediaStreamSource(remoteStream);
+          const scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+          
+          scriptProcessor.onaudioprocess = (e) => {
+            const inputData = e.inputBuffer.getChannelData(0);
+            const pcmBlob = createBlob(inputData);
+            // Fix: Relying on sessionPromise to send input only after connection is ready
+            sessionPromise.then((session) => {
+              session.sendRealtimeInput({ media: pcmBlob });
+            });
+          };
+
+          source.connect(scriptProcessor);
+          scriptProcessor.connect(audioContext.destination);
+        },
+        onmessage: async (message: LiveServerMessage) => {
+          // Gemini Live API sends transcription of the "input" (the remote participant in this case)
+          if (message.serverContent?.inputTranscription) {
+            const text = message.serverContent.inputTranscription.text;
+            currentTranscriptionRef.current += text;
+            
+            // Streaming UI update for better UX
+            setTranscripts(prev => {
+              const last = prev[prev.length - 1];
+              if (last && last.sender === 'Partner' && (Date.now() - last.timestamp.getTime() < 5000)) {
+                return [...prev.slice(0, -1), { ...last, text: currentTranscriptionRef.current }];
+              }
+              return [...prev, { 
+                id: Math.random().toString(36).substr(2, 9),
+                sender: 'Partner',
+                text: currentTranscriptionRef.current,
+                timestamp: new Date()
+              }];
+            });
+          }
+
+          if (message.serverContent?.turnComplete) {
+            currentTranscriptionRef.current = '';
+          }
+        },
+        onerror: (e) => console.error('Transcription Error:', e),
+        onclose: () => console.debug('Transcription Session Closed'),
+      },
+      config: {
+        responseModalities: [Modality.AUDIO],
+        inputAudioTranscription: {},
+        systemInstruction: 'You are a transcription assistant. Your only job is to provide real-time captions for a conversation. Do not respond verbally.',
+      },
+    });
+
+    return () => {
+      sessionPromise.then(s => s.close());
+      audioContext.close();
+    };
+  }, [status, remoteStream]);
 
   return (
     <div className="fixed inset-0 w-full h-full bg-[#202124] overflow-hidden flex flex-col font-sans">
@@ -64,19 +162,31 @@ const CallContainer: React.FC<CallContainerProps> = ({
                   muted 
                 />
              )}
+             {/* Fix: Resolved "Cannot find name 'profile'" by receiving it as a prop */}
              {isVideoOff && (
                <div className="absolute inset-0 bg-[#202124] flex items-center justify-center">
                   <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold">
-                    Y
+                    {profile?.name[0] || 'Y'}
                   </div>
                </div>
              )}
           </div>
+
+          {/* Live Caption Overlay (Meet Style) */}
+          {transcripts.length > 0 && (
+            <div className="absolute bottom-32 left-1/2 -translate-x-1/2 w-full max-w-2xl px-6 pointer-events-none">
+              <div className="bg-black/60 backdrop-blur-md px-4 py-2 rounded-lg text-center">
+                 <p className="text-white text-lg font-medium drop-shadow-lg">
+                    {transcripts[transcripts.length - 1].text}
+                 </p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* 2. Bottom Controls Bar */}
-      <div className="h-24 px-6 flex items-center justify-between z-[60] relative">
+      <div className="h-24 px-6 flex items-center justify-between z-[60] relative bg-[#202124]">
         <div className="flex-1 flex items-center gap-4 text-white overflow-hidden">
           <button 
             onClick={() => setShowDetails(!showDetails)}
@@ -89,7 +199,7 @@ const CallContainer: React.FC<CallContainerProps> = ({
         <div className="flex items-center gap-3">
           <button 
             onClick={() => setIsMuted(!isMuted)} 
-            className={`w-12 h-12 control-btn ${isMuted ? 'bg-red-500 text-white' : 'bg-[#3c4043] hover:bg-[#434649] text-white'}`}
+            className={`w-12 h-12 control-btn ${isMuted ? 'bg-red-500 text-white' : 'bg-[#3c4043] hover:bg-[#434649] text-white'} rounded-full flex items-center justify-center transition-all`}
             title={isMuted ? "Unmute" : "Mute"}
           >
             {isMuted ? (
@@ -101,7 +211,7 @@ const CallContainer: React.FC<CallContainerProps> = ({
 
           <button 
             onClick={() => setIsVideoOff(!isVideoOff)} 
-            className={`w-12 h-12 control-btn ${isVideoOff ? 'bg-red-500 text-white' : 'bg-[#3c4043] hover:bg-[#434649] text-white'}`}
+            className={`w-12 h-12 control-btn ${isVideoOff ? 'bg-red-500 text-white' : 'bg-[#3c4043] hover:bg-[#434649] text-white'} rounded-full flex items-center justify-center transition-all`}
             title={isVideoOff ? "Turn on camera" : "Turn off camera"}
           >
             {isVideoOff ? (
@@ -112,15 +222,8 @@ const CallContainer: React.FC<CallContainerProps> = ({
           </button>
 
           <button 
-            className="w-12 h-12 control-btn bg-[#3c4043] hover:bg-[#434649] text-white"
-            title="Present now"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 12l-4-4m4 4l4-4m6 0v4m0 0H9m11 0h-5" /></svg>
-          </button>
-
-          <button 
             onClick={onHangup} 
-            className="w-20 h-12 control-btn bg-red-500 hover:bg-red-600 text-white rounded-[24px]"
+            className="w-20 h-12 control-btn bg-red-500 hover:bg-red-600 text-white rounded-[24px] flex items-center justify-center transition-all"
             title="Leave call"
           >
             <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
@@ -130,12 +233,9 @@ const CallContainer: React.FC<CallContainerProps> = ({
         <div className="flex-1 flex items-center justify-end gap-2">
            <button 
              onClick={() => setSidebarOpen(!sidebarOpen)}
-             className={`w-12 h-12 control-btn hover:bg-white/5 ${sidebarOpen ? 'text-blue-400' : 'text-white'}`}
+             className={`w-12 h-12 control-btn hover:bg-white/5 rounded-full flex items-center justify-center transition-all ${sidebarOpen ? 'text-[#00a884]' : 'text-white'}`}
            >
              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z" /></svg>
-           </button>
-           <button className="w-12 h-12 control-btn text-white hover:bg-white/5">
-             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" /></svg>
            </button>
         </div>
       </div>
@@ -154,19 +254,19 @@ const CallContainer: React.FC<CallContainerProps> = ({
              <span className="text-sm font-mono truncate mr-2">talkspot.com/{roomId}</span>
              <button 
               onClick={() => navigator.clipboard.writeText(`https://talkspot.com/${roomId}`)}
-              className="text-blue-500 hover:text-blue-400 p-1"
+              className="text-[#00a884] hover:text-[#06cf9c] p-1"
              >
                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" /></svg>
              </button>
           </div>
-          <button className="text-sm text-blue-500 hover:underline">Copy joining info</button>
+          <button className="text-sm text-[#00a884] hover:underline">Copy joining info</button>
         </div>
       )}
 
       {/* 4. Side Panels */}
       <Sidebar 
         isOpen={sidebarOpen} 
-        transcripts={[]} 
+        transcripts={transcripts} 
         onClose={() => setSidebarOpen(false)} 
       />
     </div>
