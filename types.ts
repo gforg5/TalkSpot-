@@ -12,9 +12,16 @@ export type IceStatus = 'new' | 'checking' | 'connected' | 'completed' | 'failed
 
 export interface UserProfile {
   name: string;
-  id: string; // Phone, Email, or Username
+  id: string; // Handle/ID
   avatar?: string; // Base64 image
   avatarColor: string;
+}
+
+export interface CallRecord {
+  id: string;
+  targetId: string;
+  timestamp: string;
+  status: 'completed' | 'missed';
 }
 
 export interface SignalingMessage {

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { CallStatus, SignalingMessage, IceStatus, UserProfile } from './types';
+import { CallStatus, SignalingMessage, IceStatus, UserProfile, CallRecord, Contact } from './types';
 import RoomSetup from './components/RoomSetup';
 import CallContainer from './components/CallContainer';
 import Header from './components/Header';
@@ -16,6 +16,18 @@ const App: React.FC = () => {
       return null;
     }
   });
+
+  const [friends, setFriends] = useState<Contact[]>(() => {
+    const saved = localStorage.getItem('talkspot_friends');
+    return saved ? JSON.parse(saved) : [
+      { id: 'core', name: 'Neural Core', handle: 'core_service', initials: 'NC', status: 'online' }
+    ];
+  });
+
+  const [records, setRecords] = useState<CallRecord[]>(() => {
+    const saved = localStorage.getItem('talkspot_records');
+    return saved ? JSON.parse(saved) : [];
+  });
   
   const [roomId, setRoomId] = useState<string>('');
   const [status, setStatus] = useState<CallStatus>(CallStatus.IDLE);
@@ -27,20 +39,14 @@ const App: React.FC = () => {
   const channelRef = useRef<BroadcastChannel | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
 
-  // Sync profile state across tabs and handle logout immediately
+  // Persistence effects
   useEffect(() => {
-    const syncProfile = () => {
-      const saved = localStorage.getItem('talkspot_profile');
-      if (!saved) {
-        setProfile(null);
-        cleanup();
-      } else {
-        setProfile(JSON.parse(saved));
-      }
-    };
-    window.addEventListener('storage', syncProfile);
-    return () => window.removeEventListener('storage', syncProfile);
-  }, []);
+    localStorage.setItem('talkspot_friends', JSON.stringify(friends));
+  }, [friends]);
+
+  useEffect(() => {
+    localStorage.setItem('talkspot_records', JSON.stringify(records));
+  }, [records]);
 
   const cleanup = useCallback(() => {
     if (pcRef.current) {
@@ -60,6 +66,28 @@ const App: React.FC = () => {
     setIceStatus('new');
     setRoomId('');
   }, [localStream]);
+
+  const addRecord = (targetId: string) => {
+    const newRecord: CallRecord = {
+      id: Math.random().toString(36).substr(2, 9),
+      targetId,
+      timestamp: new Date().toISOString(),
+      status: 'completed'
+    };
+    setRecords(prev => [newRecord, ...prev].slice(0, 20));
+  };
+
+  const handleAddFriend = (handle: string, name: string) => {
+    if (friends.some(f => f.handle === handle)) return;
+    const newFriend: Contact = {
+      id: Math.random().toString(36).substr(2, 9),
+      name,
+      handle,
+      initials: name.split(' ').map(n => n[0]).join('').toUpperCase(),
+      status: 'offline'
+    };
+    setFriends(prev => [...prev, newFriend]);
+  };
 
   const initWebRTC = useCallback(async (id: string) => {
     const pc = new RTCPeerConnection({
@@ -97,15 +125,12 @@ const App: React.FC = () => {
       setLocalStream(stream);
       setStatus(CallStatus.CONNECTING);
       
-      // Close previous channel if any
       if (channelRef.current) channelRef.current.close();
-      
       channelRef.current = new BroadcastChannel(`talkspot_${id}`);
       
       const pc = await initWebRTC(id);
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      // Signaling logic
       channelRef.current.onmessage = async (event: MessageEvent<SignalingMessage>) => {
         const msg = event.data;
         if (msg.sender === profile.id || msg.roomId !== id) return;
@@ -122,10 +147,12 @@ const App: React.FC = () => {
             await pc.setLocalDescription(answer);
             channelRef.current?.postMessage({ type: 'answer', payload: answer, sender: profile.id, roomId: id });
             setStatus(CallStatus.IN_CALL);
+            addRecord(id);
             break;
           case 'answer':
             await pc.setRemoteDescription(new RTCSessionDescription(msg.payload));
             setStatus(CallStatus.IN_CALL);
+            addRecord(id);
             break;
           case 'candidate':
             await pc.addIceCandidate(new RTCIceCandidate(msg.payload));
@@ -136,7 +163,6 @@ const App: React.FC = () => {
         }
       };
 
-      // Broadcast join intent
       channelRef.current.postMessage({ type: 'join', sender: profile.id, roomId: id } as SignalingMessage);
       
     } catch (err: any) {
@@ -155,12 +181,14 @@ const App: React.FC = () => {
 
   const handleLogout = () => {
     localStorage.removeItem('talkspot_profile');
+    localStorage.removeItem('talkspot_friends');
+    localStorage.removeItem('talkspot_records');
     setProfile(null);
     cleanup();
   };
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-[#0b141a]">
+    <div className="flex flex-col h-screen overflow-hidden bg-[#020204]">
       {status === CallStatus.IDLE && profile && (
         <Header status={status} onLogout={handleLogout} />
       )}
@@ -168,9 +196,15 @@ const App: React.FC = () => {
         {!profile ? (
           <ProfileSetup onComplete={setProfile} />
         ) : (status === CallStatus.IDLE || status === CallStatus.ERROR ? (
-          <RoomSetup onJoin={handleJoinRoom} error={error} profile={profile} />
+          <RoomSetup 
+            onJoin={handleJoinRoom} 
+            error={error} 
+            profile={profile} 
+            friends={friends}
+            records={records}
+            onAddFriend={handleAddFriend}
+          />
         ) : (
-          /* Fix: Passing the profile prop down to CallContainer */
           <CallContainer 
             localStream={localStream}
             remoteStream={remoteStream}
